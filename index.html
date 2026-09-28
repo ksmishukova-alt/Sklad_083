@@ -42,6 +42,556 @@
   .list .x{text-decoration:line-through;color:var(--mute)}
   table{width:100%;border-collapse:collapse;font-size:13px} td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   td.n{text-align:right;white-space:nowrap} .p{color:var(--ok);font-weight:700} .m{color:var(--bad);font-weight:700}
+  #reader{position:relative;width:100%;border-radius:12px;overflow:hidden;margin:6px 0;border:4px solid transparent;background:#000;transition:border-color .1s}
+  #reader.hit{border-color:var(--ok)}
+  #reader video{display:block;width:100%;max-height:42vh;object-fit:cover}
+  #reader .hint{position:absolute;left:0;right:0;bottom:0;padding:6px;color:#fff;font-size:13px;text-align:center;background:rgba(0,0,0,.45)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:9}
+  .modal .card{width:100%;max-width:560px;margin:0;border-radius:16px 16px 0 0;max-height:80vh;overflow:auto}
+  details summary{cursor:pointer;color:var(--mute);padding:10px 0;font-size:15px}
+  .qty{width:84px;flex:0 0 84px;text-align:center}
+  .mul-on{border:2px solid var(--warn)!important;background:var(--warnbg)!important}
+  .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#1d2330;color:#fff;padding:10px 16px;border-radius:10px;font-size:15px;z-index:10;max-width:90%}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ВХОД -->
+  <div id="scrLogin">
+    <h1>Склад · вход</h1>
+    <div class="card">
+      <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN">
+      <button class="btn" id="btnLogin">Войти</button>
+      <div id="loginMsg" class="mute"></div>
+    </div>
+  </div>
+
+  <!-- ГЛАВНАЯ -->
+  <div id="scrHome" class="hidden">
+    <div class="top"><b id="hello"></b><button class="btn sec small" id="btnLogout">Выйти</button></div>
+    <div id="prodInfo" class="mute"></div>
+    <div id="invBox"></div>
+    <button class="btn sec" id="btnStock">🔎 Остатки</button>
+    <button class="btn sec" id="btnRefresh">↻ Обновить</button>
+    <div id="seniorBox" class="hidden">
+      <details id="more">
+        <summary>Ещё (старший) ▸</summary>
+        <div id="seniorActions"></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- СКАНИРОВАНИЕ -->
+  <div id="scrScan" class="hidden">
+    <div class="top">
+      <button class="btn sec small" id="btnBack">← Назад</button>
+      <b id="scanDoc"></b>
+      <span class="badge" id="sync">✓ всё отправлено</span>
+    </div>
+    <div class="seg" id="segStatus">
+      <button data-s="годный" class="on g">Годный</button>
+      <button data-s="брак" class="b">Брак</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="zone" placeholder="Зона / куча (необязательно)">
+      <input id="mul" class="qty" type="number" inputmode="numeric" min="1" value="1" title="Сколько штук засчитать за один скан">
+    </div>
+    <div class="mute" style="margin:2px 0 6px">Число справа — сколько штук засчитать за следующий скан (для пачек). После скана снова 1.</div>
+    <input id="code" inputmode="none" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Сканируйте штрихкод">
+    <div class="row">
+      <button class="btn sec small" id="btnCam">📷 Камера</button>
+      <button class="btn sec small" id="btnKbd">⌨ Ввести руками</button>
+      <label class="btn sec small hidden" id="lblPhoto">🖼 Фото штрихкода<input id="photo" type="file" accept="image/*" capture="environment" class="hidden"></label>
+    </div>
+    <div id="reader" class="hidden"><video id="vid" playsinline muted autoplay></video><div class="hint">Наведите на штрихкод — рамка не нужна</div></div>
+    <div class="res" id="res"><div class="mute">Ждём скан…</div></div>
+    <div class="cnt">
+      <div><span class="mute">Я отсканировал</span><b id="cMine">0</b></div>
+      <div><span class="mute">Всего в документе</span><b id="cDoc">—</b></div>
+    </div>
+    <button class="btn sec" id="btnUndo" disabled>↶ Отменить последний скан</button>
+    <h2>Последние сканы</h2>
+    <div class="list" id="recent"></div>
+  </div>
+
+  <!-- РАСХОЖДЕНИЯ -->
+  <div id="scrDiff" class="hidden">
+    <div class="top"><button class="btn sec small" data-go="home">← Назад</button><b id="diffDoc"></b></div>
+    <div id="diffBody" class="card">Считаю…</div>
+    <button class="btn sec" id="btnDiffRefresh">↻ Пересчитать</button>
+    <button class="btn ok" id="btnPost">✔ Провести — остатки станут равны факту</button>
+  </div>
+
+  <!-- ОСТАТКИ -->
+  <div id="scrStock" class="hidden">
+    <div class="top"><button class="btn sec small" data-go="home">← Назад</button><b>Остатки</b></div>
+    <input id="q" placeholder="ШК, артикул или название">
+    <div id="stockRes" class="card mute">Введите минимум 2 символа</div>
+  </div>
+</div>
+
+<div id="modal" class="modal hidden"><div class="card" id="modalBody"></div></div>
+
+<script>
+/* ---------- утилиты ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Адрес API (веб-приложение Apps Script). Если страница открыта внутри Apps Script — работает напрямую.
+const API_URL = 'https://script.google.com/macros/s/AKfycbw1xMGtj76dGia_vg0NJUfkrZLte1ls_KGjjtES7nIsrCYXkb9iiXI-xVeyzdfSGDpRkA/exec';
+const IN_GAS = !!(window.google && google.script && google.script.run);
+const call = (fn, ...args) => IN_GAS
+  ? new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(e => rej(e && e.message ? e : new Error(String(e))))[fn](...args))
+  : fetch(API_URL, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn, args }) })
+      .then(r => { if (!r.ok) throw new Error('Сервер ответил ' + r.status); return r.json(); })
+      .then(j => { if (!j.ok) throw new Error(j.error || 'Ошибка'); return j.result; });
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} },
+  del(k){ try { localStorage.removeItem(k); } catch(e){} }
+};
+function toast(msg, ms){ const t=document.createElement('div'); t.className='toast'; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), ms||2500); }
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+function normKey(raw){
+  let s = String(raw||'').replace(/[\u0000-\u001f]/g,'').trim();
+  if (/^01\d{14}/.test(s) && s.length > 16) s = s.substr(2,14);   // DataMatrix Честного знака → GTIN
+  if (/^\d+$/.test(s)) s = s.replace(/^0+/,'') || '0';
+  return s;
+}
+let actx;
+function beep(ok){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const o=actx.createOscillator(), g=actx.createGain();
+    o.frequency.value = ok ? 1250 : 220; o.type = ok ? 'sine' : 'square';
+    g.gain.value = .15; o.connect(g); g.connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + (ok ? .09 : .45));
+  }catch(e){}
+  try{ if(!ok && navigator.vibrate) navigator.vibrate([200,80,200]); }catch(e){}
+}
+
+/* ---------- состояние ---------- */
+const S = {
+  pin:null, user:null, doc:null, products:[], map:{},
+  status:'годный', queue:[], inflight:false, recent:[], mine:0, mineByKey:{}, srv:{}, docTotal:null,
+  device: store.get('sklad_dev') || (()=>{ const d='d'+uid(); store.set('sklad_dev', d); return d; })(),
+  last:null, netErr:false
+};
+
+function show(name){
+  ['Login','Home','Scan','Diff','Stock'].forEach(n => $('scr'+n).classList.toggle('hidden', n!==name));
+  if (name==='Scan') setTimeout(()=>$('code').focus(), 50); else stopCam();
+}
+document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { show('Home'); refresh(); });
+
+/* ---------- вход ---------- */
+async function login(){
+  const pin = $('pin').value.trim();
+  $('loginMsg').textContent = 'Проверяю…';
+  beep(true);
+  try{
+    const r = await call('apiLogin', pin);
+    S.pin = pin; S.user = r.user; S.doc = r.openInv;
+    try{ sessionStorage.setItem('sklad_pin', pin); }catch(e){}
+    $('loginMsg').textContent = '';
+    renderHome(); show('Home');
+    loadProducts();
+  }catch(e){ $('loginMsg').textContent = e.message; }
+}
+$('btnLogin').onclick = login;
+$('pin').addEventListener('keydown', e => { if (e.key==='Enter') login(); });
+$('btnLogout').onclick = () => { try{ sessionStorage.removeItem('sklad_pin'); }catch(e){} S.pin=null; $('pin').value=''; show('Login'); };
+
+async function loadProducts(){
+  $('prodInfo').textContent = 'Загружаю справочник товаров…';
+  try{
+    const arr = await call('apiProducts', S.pin);
+    S.products = arr; S.map = {};
+    arr.forEach((p,i) => [p[1], p[2]].forEach(c => { const k = normKey(c); if(!k) return; (S.map[k] = S.map[k]||[]); if (S.map[k].indexOf(i)<0) S.map[k].push(i); }));
+    $('prodInfo').textContent = 'Справочник: ' + arr.length + ' товаров';
+  }catch(e){ $('prodInfo').textContent = 'Справочник не загрузился: ' + e.message; }
+}
+
+/* ---------- главная ---------- */
+async function refresh(){
+  try{ const r = await call('apiStatus', S.pin); S.doc = r.openInv; renderHome(); }
+  catch(e){ toast(e.message); }
+}
+$('btnRefresh').onclick = refresh;
+
+function renderHome(){
+  $('hello').textContent = S.user.name + ' · ' + S.user.role;
+  const senior = S.user.role === 'старший';
+  if (S.doc){
+    $('invBox').innerHTML = '<button class="btn ok" id="btnGo">▶ Пикать: ' + esc(S.doc.no) + '</button>' +
+      '<div class="mute">Инвентаризация (' + esc(S.doc.mode) + '), начата ' + esc(S.doc.created) + ', ' + esc(S.doc.createdBy) + '</div>';
+    $('btnGo').onclick = openScan;
+  } else {
+    $('invBox').innerHTML = '<div class="card mute">Сейчас нет открытой инвентаризации.' + (senior ? ' Начать её можно в «Ещё».' : ' Её начинает старший.') + '</div>';
+  }
+  $('seniorBox').classList.toggle('hidden', !senior);
+  if (senior){
+    let h = '';
+    if (!S.doc){
+      h += '<button class="btn" id="bFull">Начать ПОЛНУЮ инвентаризацию (с нуля)</button>' +
+           '<div class="mute">Всё, что не отсканируют, при проведении станет 0.</div>' +
+           '<button class="btn sec" id="bPart">Начать частичную</button>' +
+           '<div class="mute">Пересчитываются только те ШК, которые отсканировали. Остальное не трогаем.</div>';
+    } else {
+      h += '<button class="btn" id="bDiff">Расхождения и проведение</button>' +
+           '<button class="btn bad" id="bCancel">Отменить инвентаризацию</button>';
+    }
+    $('seniorActions').innerHTML = h;
+    if ($('bFull')) $('bFull').onclick = () => startInv('полная');
+    if ($('bPart')) $('bPart').onclick = () => startInv('частичная');
+    if ($('bDiff')) $('bDiff').onclick = openDiff;
+    if ($('bCancel')) $('bCancel').onclick = cancelInv;
+  }
+}
+
+async function startInv(mode){
+  const txt = mode==='полная'
+    ? 'Начать ПОЛНУЮ инвентаризацию?\nПосле проведения остатки всех товаров станут равны тому, что отсканируют.'
+    : 'Начать частичную инвентаризацию?';
+  if (!confirm(txt)) return;
+  const comment = prompt('Комментарий (необязательно), например: «весь склад» или «джинсы»', '') || '';
+  try{ S.doc = await call('apiStartInventory', S.pin, mode, comment); renderHome(); toast('Начата ' + S.doc.no); }
+  catch(e){ alert(e.message); }
+}
+async function cancelInv(){
+  if (!confirm('Отменить ' + S.doc.no + '? Сканы останутся в листе «Сканы», но остатки не изменятся.')) return;
+  try{ await call('apiCancelInventory', S.pin, S.doc.no); S.doc=null; renderHome(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ---------- сканирование ---------- */
+function openScan(){
+  if (!S.products.length) { if (!confirm('Справочник ещё не загрузился — все товары будут «неизвестными». Всё равно продолжить?')) return; }
+  $('scanDoc').textContent = S.doc.no;
+  const saved = store.get('sklad_q');
+  if (saved && saved.doc === S.doc.no && saved.q && saved.q.length){ S.queue = saved.q; toast('Восстановлено неотправленных сканов: ' + S.queue.length); }
+  if (S.lastDoc !== S.doc.no){ S.lastDoc = S.doc.no; S.recent=[]; S.mine=0; S.mineByKey={}; S.srv={}; S.docTotal=null; renderRecent(); }
+  renderCounts(); updSync();
+  show('Scan');
+}
+$('btnBack').onclick = () => { show('Home'); refresh(); };
+
+document.querySelectorAll('#segStatus button').forEach(b => b.onclick = () => {
+  S.status = b.dataset.s;
+  document.querySelectorAll('#segStatus button').forEach(x => x.classList.toggle('on', x===b));
+  $('code').focus();
+});
+$('mul').addEventListener('input', () => $('mul').classList.toggle('mul-on', Number($('mul').value) > 1));
+$('mul').addEventListener('keydown', e => { if (e.key==='Enter'){ e.preventDefault(); $('code').focus(); } });
+$('zone').addEventListener('keydown', e => { if (e.key==='Enter'){ e.preventDefault(); $('code').focus(); } });
+
+$('code').addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === 'Tab'){
+    e.preventDefault();
+    const v = $('code').value; $('code').value = '';
+    if (v.trim()) handleScan(v);
+  }
+});
+// Автоввод: если в поле попал полный известный штрихкод (например, через «Сканировать текст» iPhone) — засчитываем без Enter
+let autoT;
+$('code').addEventListener('input', () => {
+  clearTimeout(autoT);
+  autoT = setTimeout(() => {
+    const v = $('code').value.replace(/\s+/g, '');
+    if (/^\d{8,14}$/.test(v) && S.map[normKey(v)]) { $('code').value = ''; handleScan(v); }
+  }, 350);
+});
+$('btnKbd').onclick = () => {
+  const c = $('code');
+  c.setAttribute('inputmode', c.getAttribute('inputmode')==='none' ? 'numeric' : 'none');
+  c.blur(); setTimeout(()=>c.focus(), 30);
+};
+// держим фокус в поле скана (для USB/Bluetooth сканера)
+setInterval(() => {
+  if ($('scrScan').classList.contains('hidden') || !$('modal').classList.contains('hidden')) return;
+  const a = document.activeElement;
+  if (!a || a === document.body) $('code').focus();
+}, 700);
+
+function handleScan(raw){
+  raw = String(raw).replace(/[\u0000-\u001f]/g,'').trim();
+  const k = normKey(raw);
+  const m = S.map[k] || [];
+  if (m.length > 1){
+    beep(false);
+    let h = '<h2>Этот ШК стоит на ' + m.length + ' товарах. Какой в руках?</h2>';
+    m.forEach(i => { const p = S.products[i]; h += '<button class="btn sec" data-i="'+i+'">' + esc(p[3]) + ' · ' + esc(p[5]) + '<br><span class="mute">' + esc(p[4]) + '</span></button>'; });
+    h += '<button class="btn bad" id="mCancel">Отмена</button><div class="mute">Сообщите старшему: этот ШК нужно исправить в МоёмСкладе.</div>';
+    $('modalBody').innerHTML = h; $('modal').classList.remove('hidden');
+    $('modalBody').querySelectorAll('[data-i]').forEach(b => b.onclick = () => { $('modal').classList.add('hidden'); addScan(raw, S.products[+b.dataset.i]); $('code').focus(); });
+    $('mCancel').onclick = () => { $('modal').classList.add('hidden'); $('code').focus(); };
+    return;
+  }
+  addScan(raw, m.length ? S.products[m[0]] : null);
+}
+
+function addScan(raw, p){
+  const key = p ? normKey(p[0]) : normKey(raw);
+  let qty = Math.max(1, Math.floor(Number($('mul').value) || 1));
+  const item = { id: uid(), raw, key, qty, status: S.status, zone: $('zone').value.trim() };
+  S.queue.push(item); saveQ();
+  S.mine += qty; S.mineByKey[key] = (S.mineByKey[key]||0) + qty;
+  S.recent.unshift({ item, p, undone:false });
+  if (S.recent.length > 30) S.recent.pop();
+  S.last = { key, p, raw, qty };
+  $('mul').value = 1; $('mul').classList.remove('mul-on');
+  beep(!!p);
+  renderResult(); renderCounts(); renderRecent(); updSync();
+  flush();
+}
+
+function renderResult(){
+  const L = S.last; if (!L) return;
+  const r = $('res');
+  const inDoc = S.srv[L.key];
+  const tail = '<div class="mute" style="margin-top:6px">Этого товара: я — <b>' + (S.mineByKey[L.key]||0) + '</b>, в документе — <b>' + (inDoc==null?'…':inDoc) + '</b>' + (S.status==='брак'?' · <b style="color:var(--bad)">БРАК</b>':'') + '</div>';
+  if (L.p){
+    const p = L.p;
+    r.className = 'res ok';
+    r.innerHTML = (p[8] ? '<img src="'+esc(p[8])+'" onerror="this.remove()" referrerpolicy="no-referrer">' : '') +
+      '<div class="big">+' + L.qty + ' · ' + esc(p[5] || '—') + '</div>' +
+      '<div class="nm">' + esc(p[3]) + (p[6] ? ' · ' + esc(p[6]) : '') + '</div>' +
+      '<div class="mute">' + esc(p[4]) + '</div>' + tail;
+  } else {
+    r.className = 'res err';
+    r.innerHTML = '<div class="big">НЕТ В СПРАВОЧНИКЕ</div><div class="nm">' + esc(L.raw) + '</div>' +
+      '<div class="mute">Скан засчитан (+' + L.qty + '). Отложите вещь в кучу «Неизвестные» — разберём после.</div>' + tail;
+  }
+}
+function renderCounts(){ $('cMine').textContent = S.mine; $('cDoc').textContent = S.docTotal==null ? '—' : S.docTotal; }
+function renderRecent(){
+  $('recent').innerHTML = S.recent.map(x => '<div class="'+(x.undone?'x':'')+'"><span>' + (x.item.qty>0?'+':'') + x.item.qty + ' ' + esc(x.p ? (x.p[3] + ' · ' + x.p[5]) : ('? ' + x.item.raw)) + (x.item.status==='брак'?' (брак)':'') + '</span><span class="mute">' + esc(x.item.zone) + '</span></div>').join('');
+  $('btnUndo').disabled = !S.recent.some(x => !x.undone && x.item.qty > 0);
+}
+$('btnUndo').onclick = () => {
+  const x = S.recent.find(r => !r.undone && r.item.qty > 0);
+  if (!x) return;
+  x.undone = true;
+  const it = { id: uid(), raw: x.item.raw, key: x.item.key, qty: -x.item.qty, status: x.item.status, zone: x.item.zone };
+  S.queue.push(it); saveQ();
+  S.mine -= x.item.qty; S.mineByKey[x.item.key] -= x.item.qty;
+  S.recent.unshift({ item: it, p: x.p, undone: true });
+  toast('Отменено: ' + (x.p ? x.p[3] : x.item.raw));
+  renderCounts(); renderRecent(); updSync(); flush();
+  $('code').focus();
+};
+
+/* ---------- отправка на сервер ---------- */
+function saveQ(){ store.set('sklad_q', { doc: S.doc && S.doc.no, q: S.queue }); }
+function updSync(){
+  const b = $('sync');
+  if (S.fatal){ b.className='badge e'; b.textContent='⛔ ' + S.fatal; return; }
+  if (!S.queue.length){ b.className='badge'; b.textContent='✓ всё отправлено'; return; }
+  b.className = 'badge ' + (S.netErr ? 'e' : 'w');
+  b.textContent = (S.netErr ? '⚠ нет связи, ждут: ' : '⇅ отправляю: ') + S.queue.length;
+}
+async function flush(){
+  if (S.inflight || !S.queue.length || !S.doc || S.fatal) return;
+  S.inflight = true;
+  const batch = S.queue.slice(0, 200);
+  try{
+    const r = await call('apiPushScans', S.pin, S.doc.no, S.device, batch);
+    const sent = {}; batch.forEach(b => sent[b.id] = 1);
+    S.queue = S.queue.filter(q => !sent[q.id]); saveQ();
+    Object.assign(S.srv, r.counts); S.docTotal = r.docTotal; S.netErr = false;
+    renderCounts(); if (S.last) renderResult();
+  }catch(e){
+    if (/закрыт/i.test(e.message)){ S.fatal = 'документ закрыт'; alert(e.message); }
+    else S.netErr = true;
+  }finally{
+    S.inflight = false; updSync();
+    if (S.queue.length && !S.fatal) setTimeout(flush, S.netErr ? 4000 : 300);
+  }
+}
+setInterval(flush, 3000);
+window.addEventListener('beforeunload', e => { if (S.queue.length){ e.preventDefault(); e.returnValue=''; } });
+
+/* ---------- камера ---------- */
+// Распознавание: BarcodeDetector (на iPhone — полифил на ZXing/WebAssembly). Ищет штрихкод по всему кадру, рамка не нужна.
+const cam = { stream: null, det: null, on: false, busy: false, lastV: '', lastSeen: 0 };
+async function ensureDetector(){
+  if (cam.det) return cam.det;
+  if (!('BarcodeDetector' in window)) await import('https://cdn.jsdelivr.net/npm/barcode-detector@3.2.2/dist/es/polyfill.js');
+  const want = ['ean_13', 'ean_8', 'code_128', 'data_matrix', 'qr_code', 'upc_a'];
+  let fm = want;
+  try { const sup = await BarcodeDetector.getSupportedFormats(); fm = want.filter(f => sup.indexOf(f) >= 0); } catch(e){}
+  cam.det = new BarcodeDetector({ formats: fm });
+  return cam.det;
+}
+$('btnCam').onclick = async () => {
+  if (cam.on) return stopCam();
+  $('btnCam').textContent = '… включаю камеру';
+  try{
+    await ensureDetector();
+    cam.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+    const v = $('vid');
+    v.srcObject = cam.stream; v.setAttribute('playsinline', ''); v.muted = true;
+    await v.play();
+    $('reader').classList.remove('hidden');
+    cam.on = true; $('btnCam').textContent = '■ Выключить камеру';
+    tick();
+  }catch(e){
+    stopCam();
+    $('lblPhoto').classList.remove('hidden');
+    toast('Камера не включилась: ' + (e && e.message ? e.message : e) + '. Можно «Фото штрихкода» или сканер.', 5000);
+  }
+};
+async function tick(){
+  if (!cam.on) return;
+  const v = $('vid');
+  if (v.readyState >= 2 && !cam.busy && $('modal').classList.contains('hidden')){
+    cam.busy = true;
+    try{
+      const r = await cam.det.detect(v);
+      const now = Date.now();
+      if (r.length){
+        const val = r[0].rawValue;
+        // тот же код засчитываем снова только после того, как он пропал из кадра (следующая вещь)
+        if (val !== cam.lastV || now - cam.lastSeen > 700){
+          handleScan(val);
+          const box = $('reader'); box.classList.add('hit'); setTimeout(() => box.classList.remove('hit'), 350);
+        }
+        cam.lastV = val; cam.lastSeen = now;
+      }
+    }catch(e){}
+    cam.busy = false;
+  }
+  setTimeout(tick, 90);
+}
+function stopCam(){
+  cam.on = false;
+  if (cam.stream){ cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; }
+  const v = $('vid'); if (v) v.srcObject = null;
+  $('btnCam').textContent = '📷 Камера'; $('reader').classList.add('hidden');
+}
+$('photo').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try{
+    const det = await ensureDetector();
+    const r = await det.detect(await createImageBitmap(await shrink(f)));
+    if (!r.length) throw new Error('none');
+    handleScan(r[0].rawValue);
+  }catch(err){ beep(false); toast('Штрихкод на фото не распознан, переснимите ближе', 3000); }
+  e.target.value = '';
+};
+
+// Фото с айфона огромные (4000px) — уменьшаем, так распознаётся надёжнее
+function shrink(file){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = img.width * k; c.height = img.height * k;
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => res(new File([b], 'scan.jpg', { type: 'image/jpeg' })), 'image/jpeg', 0.9);
+    };
+    img.onerror = () => res(file);
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* ---------- расхождения ---------- */
+async function openDiff(){
+  show('Diff'); $('diffDoc').textContent = S.doc.no; $('diffBody').innerHTML = 'Считаю… (может занять до минуты)';
+  try{
+    const r = await call('apiDiff', S.pin, S.doc.no);
+    const s = r.summary;
+    let h = '<div class="cnt"><div><span class="mute">Учёт</span><b>'+s.bookTotal+'</b></div><div><span class="mute">Факт</span><b>'+s.factTotal+'</b></div></div>' +
+      '<div class="cnt"><div><span class="mute">Излишек</span><b class="p">+'+s.plus+'</b></div><div><span class="mute">Недостача</span><b class="m">−'+s.minus+'</b></div></div>' +
+      '<div class="mute">Позиций с расхождением: '+s.withDiff+' · Нет в справочнике: '+s.unknown+'</div>' +
+      '<div class="mute">Кто сколько отсканировал: ' + Object.keys(s.byUser).map(u => esc(u)+' — '+s.byUser[u]).join(', ') + '</div>';
+    if (s.moved) h += '<div class="card" style="background:var(--warnbg)">⚠ По '+s.moved+' ШК было движение товара во время пересчёта. Проверьте их перед проведением.</div>';
+    if (r.doc.mode === 'полная') h += '<div class="mute" style="margin-top:6px">Режим «полная»: всё, что не отсканировано, при проведении станет 0.</div>';
+    h += '<h2>Самые большие расхождения</h2><table><tr><th>Товар</th><th>Ст.</th><th class="n">Учёт</th><th class="n">Факт</th><th class="n">±</th></tr>' +
+      r.top.map(x => '<tr><td>'+esc(x.name)+'<br><span class="mute">'+esc(x.art)+' · '+esc(x.size)+' · '+esc(x.key)+'</span></td><td>'+(x.status==='брак'?'брак':'')+'</td><td class="n">'+x.book+'</td><td class="n">'+x.fact+'</td><td class="n '+(x.diff>0?'p':'m')+'">'+(x.diff>0?'+':'')+x.diff+'</td></tr>').join('') +
+      '</table><div class="mute">Полный список — в листе «Расхождения» таблицы.</div>';
+    $('diffBody').innerHTML = h;
+  }catch(e){ $('diffBody').textContent = e.message; }
+}
+$('btnDiffRefresh').onclick = openDiff;
+$('btnPost').onclick = async () => {
+  if (!confirm('Провести ' + S.doc.no + '?\nОстатки станут равны факту. Отменить это можно только новой инвентаризацией.')) return;
+  $('btnPost').disabled = true; $('diffBody').innerHTML = 'Провожу…';
+  try{
+    const r = await call('apiPostInventory', S.pin, S.doc.no);
+    store.del('sklad_q');
+    alert('Проведено. Корректировок: ' + r.corrections + '.\nЛисты «Остатки» и «Выгрузка МС» обновлены.');
+    S.doc = null; show('Home'); renderHome();
+  }catch(e){ alert(e.message); $('diffBody').textContent = e.message; }
+  $('btnPost').disabled = false;
+};
+
+/* ---------- остатки ---------- */
+$('btnStock').onclick = () => { show('Stock'); $('q').focus(); };
+let qT;
+$('q').addEventListener('input', () => { clearTimeout(qT); qT = setTimeout(findStock, 450); });
+$('q').addEventListener('keydown', e => { if (e.key==='Enter'){ e.preventDefault(); findStock(); } });
+async function findStock(){
+  const q = $('q').value.trim();
+  if (q.length < 2){ $('stockRes').textContent = 'Введите минимум 2 символа'; return; }
+  $('stockRes').textContent = 'Ищу…';
+  try{
+    const r = await call('apiStock', S.pin, q);
+    $('stockRes').innerHTML = !r.length ? 'Ничего нет на остатке' :
+      '<table><tr><th>Товар</th><th class="n">Годн.</th><th class="n">Брак</th></tr>' +
+      r.map(x => '<tr><td>'+esc(x.name)+'<br><span class="mute">'+esc(x.art)+' · '+esc(x.size)+' · '+esc(x.key)+'</span></td><td class="n">'+x.good+'</td><td class="n">'+x.bad+'</td></tr>').join('') + '</table>';
+  }catch(e){ $('stockRes').textContent = e.message; }
+}
+
+/* ---------- автовход ---------- */
+(function(){ let p=null; try{ p = sessionStorage.getItem('sklad_pin'); }catch(e){} if (p){ $('pin').value = p; login(); } })();
+</script>
+</body>
+</html>
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Склад</title>
+<style>
+  :root{--bg:#f4f5f7;--card:#fff;--ink:#1d2330;--mute:#6b7280;--line:#e3e5ea;--pri:#2457d6;--ok:#1f9d55;--okbg:#e5f6ec;--bad:#d64545;--badbg:#fde8e8;--warn:#b7791f;--warnbg:#fdf3e1}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.35 -apple-system,Segoe UI,Roboto,Arial,sans-serif;-webkit-tap-highlight-color:transparent}
+  .wrap{max-width:560px;margin:0 auto;padding:12px 14px 40px}
+  .hidden{display:none!important}
+  h1{font-size:22px;margin:8px 0 14px}
+  h2{font-size:18px;margin:14px 0 8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+  .btn{display:block;width:100%;border:0;border-radius:12px;padding:16px;font-size:18px;font-weight:600;margin:8px 0;background:var(--pri);color:#fff;cursor:pointer}
+  .btn.sec{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  .btn.ok{background:var(--ok)} .btn.bad{background:var(--bad)} .btn.small{padding:10px;font-size:15px;display:inline-block;width:auto;margin:4px 4px 4px 0}
+  .btn:disabled{opacity:.5}
+  input{font-size:18px;padding:12px;border:1px solid var(--line);border-radius:10px;width:100%;background:#fff;color:var(--ink)}
+  .mute{color:var(--mute);font-size:14px}
+  .row{display:flex;gap:8px;align-items:center}
+  .row>*{flex:1}
+  .top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+  .top b{font-size:15px}
+  .badge{font-size:13px;padding:4px 8px;border-radius:20px;background:var(--okbg);color:var(--ok);white-space:nowrap}
+  .badge.w{background:var(--warnbg);color:var(--warn)} .badge.e{background:var(--badbg);color:var(--bad)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{flex:1;border:0;padding:12px 6px;font-size:16px;background:#fff;color:var(--ink);font-weight:600}
+  .seg button.on.g{background:var(--ok);color:#fff} .seg button.on.b{background:var(--bad);color:#fff}
+  #code{font-size:22px;text-align:center;letter-spacing:1px;border:2px solid var(--pri)}
+  .res{border-radius:14px;padding:14px;margin:10px 0;min-height:120px;border:2px solid var(--line);background:#fff}
+  .res.ok{border-color:var(--ok);background:var(--okbg)} .res.err{border-color:var(--bad);background:var(--badbg)}
+  .res .big{font-size:26px;font-weight:800;margin:2px 0}
+  .res .nm{font-size:17px;font-weight:600}
+  .res img{float:right;width:78px;height:104px;object-fit:cover;border-radius:8px;margin-left:10px;background:#eee}
+  .cnt{display:flex;gap:8px;margin:8px 0} .cnt div{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;text-align:center}
+  .cnt b{display:block;font-size:22px}
+  .list{font-size:14px} .list div{padding:6px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+  .list .x{text-decoration:line-through;color:var(--mute)}
+  table{width:100%;border-collapse:collapse;font-size:13px} td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  td.n{text-align:right;white-space:nowrap} .p{color:var(--ok);font-weight:700} .m{color:var(--bad);font-weight:700}
   #reader{width:100%;border-radius:12px;overflow:hidden;margin:6px 0}
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:9}
   .modal .card{width:100%;max-width:560px;margin:0;border-radius:16px 16px 0 0;max-height:80vh;overflow:auto}
