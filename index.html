@@ -59,7 +59,7 @@
 
   <!-- ВХОД -->
   <div id="scrLogin">
-    <h1>Склад · вход</h1>
+    <h1>Склад · вход <span class="mute" style="font-size:12px">v3</span></h1>
     <div class="card">
       <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN">
       <button class="btn" id="btnLogin">Войти</button>
@@ -428,7 +428,7 @@ $('btnCam').onclick = async () => {
   $('btnCam').textContent = '… включаю камеру';
   try{
     await ensureDetector();
-    cam.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+    cam.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
     const v = $('vid');
     v.srcObject = cam.stream; v.setAttribute('playsinline', ''); v.muted = true;
     await v.play();
@@ -447,7 +447,17 @@ async function tick(){
   if (v.readyState >= 2 && !cam.busy && $('modal').classList.contains('hidden')){
     cam.busy = true;
     try{
-      const r = await cam.det.detect(v);
+      // чётные кадры — весь кадр, нечётные — увеличенный центр (для мелких/дальних штрихкодов)
+      cam.n = (cam.n || 0) + 1;
+      let src = v;
+      if (cam.n % 2 === 0 && v.videoWidth){
+        const w = v.videoWidth, h = v.videoHeight, cw = Math.round(w * 0.6), ch = Math.round(h * 0.6);
+        const c = cam.cv || (cam.cv = document.createElement('canvas'));
+        c.width = cw * 2; c.height = ch * 2;
+        c.getContext('2d').drawImage(v, (w - cw) / 2, (h - ch) / 2, cw, ch, 0, 0, c.width, c.height);
+        src = c;
+      }
+      const r = await cam.det.detect(src);
       const now = Date.now();
       if (r.length){
         const val = r[0].rawValue;
@@ -461,7 +471,7 @@ async function tick(){
     }catch(e){}
     cam.busy = false;
   }
-  setTimeout(tick, 90);
+  setTimeout(tick, 60);
 }
 function stopCam(){
   cam.on = false;
